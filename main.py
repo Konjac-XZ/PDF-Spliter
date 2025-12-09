@@ -8,6 +8,8 @@ from __future__ import annotations
 import argparse
 import copy
 import math
+import platform
+import subprocess
 import sys
 from dataclasses import dataclass
 from io import BytesIO
@@ -39,7 +41,7 @@ class DotMatrixConfig:
 
     dot_spacing_mm: float = 10.0  # 1 cm between dots
     dot_diameter_mm: float = 0.4  # 0.4 mm diameter
-    dot_color_hex: str = "#dddddd"  # Light gray
+    dot_color_hex: str = "#a0a0a0"  # Light gray
 
     @property
     def dot_radius_mm(self) -> float:
@@ -164,6 +166,44 @@ def create_dot_matrix_overlay(
     return buffer
 
 
+def open_in_chrome(file_path: Path) -> None:
+    """Open a PDF file in Chrome browser.
+
+    Args:
+        file_path: Path to the PDF file to open
+    """
+    system = platform.system()
+
+    # Determine Chrome executable path based on OS
+    if system == "Windows":
+        # Common Chrome paths on Windows
+        chrome_paths = [
+            Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+        ]
+        chrome_exe = None
+        for path in chrome_paths:
+            if path.exists():
+                chrome_exe = str(path)
+                break
+
+        if chrome_exe is None:
+            print("Warning: Chrome not found in standard Windows locations", file=sys.stderr)
+            return
+    elif system == "Darwin":  # macOS
+        chrome_exe = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    else:  # Linux and others
+        chrome_exe = "google-chrome"
+
+    try:
+        subprocess.Popen([chrome_exe, str(file_path.absolute())])
+        print(f"Opened {file_path} in Chrome")
+    except FileNotFoundError:
+        print(f"Warning: Chrome executable not found: {chrome_exe}", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Failed to open Chrome: {e}", file=sys.stderr)
+
+
 def process_pdf(
     input_path: Path,
     output_path: Path,
@@ -270,6 +310,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Draw a vertical border line at center (requires --split)",
     )
+    parser.add_argument(
+        "--show-with-chrome",
+        action="store_true",
+        help="Open the output PDF in Chrome browser after processing",
+    )
     return parser.parse_args(argv)
 
 
@@ -297,6 +342,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         process_pdf(args.input, args.output, config, split=args.split, split_border=args.split_border)
         print(f"Successfully created: {args.output}")
+
+        if args.show_with_chrome:
+            open_in_chrome(args.output)
+
         return 0
     except Exception as e:
         print(f"Error processing PDF: {e}", file=sys.stderr)
