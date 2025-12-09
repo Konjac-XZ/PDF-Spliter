@@ -236,7 +236,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "output",
         type=Path,
-        help="Output PDF file path",
+        nargs="?",
+        help="Output PDF file path (optional: defaults to input_printable.pdf)",
     )
     parser.add_argument(
         "--spacing",
@@ -279,6 +280,13 @@ def main(argv: list[str] | None = None) -> int:
     if not args.input.exists():
         print(f"Error: Input file not found: {args.input}", file=sys.stderr)
         return 1
+
+    # Generate default output filename if not provided
+    if args.output is None:
+        input_stem = args.input.stem  # filename without extension
+        input_suffix = args.input.suffix  # extension (e.g., .pdf)
+        output_filename = f"{input_stem}_printable{input_suffix}"
+        args.output = args.input.parent / output_filename
 
     config = DotMatrixConfig(
         dot_spacing_mm=args.spacing,
