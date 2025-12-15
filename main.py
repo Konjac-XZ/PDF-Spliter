@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import copy
 import math
+import os
 import platform
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
+import tomli
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen.canvas import Canvas
 
@@ -42,6 +44,7 @@ class DotMatrixConfig:
     dot_spacing_mm: float = 10.0  # 1 cm between dots
     dot_diameter_mm: float = 0.4  # 0.4 mm diameter
     dot_color_hex: str = "#a0a0a0"  # Light gray
+    opacity: float = 1.0  # Opacity: 0.0 (invisible) to 1.0 (opaque)
 
     @property
     def dot_radius_mm(self) -> float:
@@ -140,6 +143,8 @@ def create_dot_matrix_overlay(
     r, g, b = config.dot_color_rgb
     canvas.setFillColorRGB(r, g, b)
     canvas.setStrokeColorRGB(r, g, b)
+    canvas.setFillAlpha(config.opacity)
+    canvas.setStrokeAlpha(config.opacity)
 
     radius_pt = mm_to_points(config.dot_radius_mm)
 
@@ -202,6 +207,62 @@ def open_in_chrome(file_path: Path) -> None:
         print(f"Warning: Chrome executable not found: {chrome_exe}", file=sys.stderr)
     except Exception as e:
         print(f"Warning: Failed to open Chrome: {e}", file=sys.stderr)
+
+
+def invoke_windows_native_print_menu(file_path: Path) -> None:
+    """Invoke the Windows shell print verb for the given file."""
+    if platform.system() != "Windows":
+        print("Warning: --native-print is only available on Windows", file=sys.stderr)
+        return
+
+    try:
+        os.startfile(file_path, "print")  # type: ignore[attr-defined]
+        print(f"Opened Windows print menu for {file_path}")
+    except OSError as e:
+        print(f"Warning: Failed to open Windows print menu: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Unexpected error invoking Windows print menu: {e}", file=sys.stderr)
+
+
+def load_config_from_toml(config_path: Path = Path("config.toml")) -> DotMatrixConfig:
+    """Load dot matrix configuration from a TOML file.
+
+    Args:
+        config_path: Path to the TOML configuration file
+
+    Returns:
+        DotMatrixConfig with values from the file, or defaults if file doesn't exist
+    """
+    if not config_path.exists():
+        return DotMatrixConfig()
+
+    try:
+        with open(config_path, "rb") as f:
+            data = tomli.load(f)
+
+        dot_matrix = data.get("dot_matrix", {})
+
+        # Load opacity with validation
+        opacity = dot_matrix.get("opacity", DotMatrixConfig.opacity)
+
+        # Validate opacity is in valid range [0.0, 1.0]
+        if not (0.0 <= opacity <= 1.0):
+            print(
+                f"Warning: opacity value {opacity} is out of range [0.0, 1.0]. "
+                f"Using default value {DotMatrixConfig.opacity}",
+                file=sys.stderr
+            )
+            opacity = DotMatrixConfig.opacity
+
+        return DotMatrixConfig(
+            dot_spacing_mm=dot_matrix.get("spacing_mm", DotMatrixConfig.dot_spacing_mm),
+            dot_diameter_mm=dot_matrix.get("diameter_mm", DotMatrixConfig.dot_diameter_mm),
+            dot_color_hex=dot_matrix.get("color_hex", DotMatrixConfig.dot_color_hex),
+            opacity=opacity,
+        )
+    except Exception as e:
+        print(f"Warning: Failed to load config from {config_path}: {e}", file=sys.stderr)
+        return DotMatrixConfig()
 
 
 def process_pdf(
@@ -280,27 +341,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Output PDF file path (optional: defaults to input_printable.pdf)",
     )
     parser.add_argument(
-        "--spacing",
-        type=float,
-        default=DotMatrixConfig.dot_spacing_mm,
-        metavar="MM",
-        help="Distance between dots in millimeters",
-    )
-    parser.add_argument(
-        "--diameter",
-        type=float,
-        default=DotMatrixConfig.dot_diameter_mm,
-        metavar="MM",
-        help="Dot diameter in millimeters",
-    )
-    parser.add_argument(
-        "--color",
-        type=str,
-        default=DotMatrixConfig.dot_color_hex,
-        metavar="HEX",
-        help="Dot color in hex format (e.g., #dddddd)",
-    )
-    parser.add_argument(
         "--split",
         action="store_true",
         help="Split each page horizontally, outputting left and right halves as separate pages",
@@ -315,11 +355,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Open the output PDF in Chrome browser after processing",
     )
+    parser.add_argument(
+        "--native-print",
+        action="store_true",
+        help="Invoke the Windows native print menu for the output PDF",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.toml"),
+        metavar="PATH",
+        help="Path to TOML configuration file",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     """Main entry point."""
+    # First, do a preliminary parse to get the config file path
+    preliminary_parser = argparse.ArgumentParser(add_help=False)
+    preliminary_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config.toml"),
+    )
+    preliminary_args, _ = preliminary_parser.parse_known_args(argv)
+
+    # Load configuration from TOML file
+    config = load_config_from_toml(preliminary_args.config)
+
+    # Parse command-line arguments
     args = parse_args(argv)
 
     if not args.input.exists():
@@ -333,17 +398,13 @@ def main(argv: list[str] | None = None) -> int:
         output_filename = f"{input_stem}_printable{input_suffix}"
         args.output = args.input.parent / output_filename
 
-    config = DotMatrixConfig(
-        dot_spacing_mm=args.spacing,
-        dot_diameter_mm=args.diameter,
-        dot_color_hex=args.color,
-    )
-
     try:
         process_pdf(args.input, args.output, config, split=args.split, split_border=args.split_border)
         print(f"Successfully created: {args.output}")
 
-        if args.show_with_chrome:
+        if args.native_print:
+            invoke_windows_native_print_menu(args.output)
+        elif args.show_with_chrome:
             open_in_chrome(args.output)
 
         return 0

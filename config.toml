@@ -1,0 +1,16 @@
+# PDF Dot Matrix Overlay Configuration
+
+[dot_matrix]
+# Distance between dots in millimeters
+spacing_mm = 10.0
+
+# Dot diameter in millimeters
+diameter_mm = 0.5
+
+# Dot color in hex format (e.g., #a0a0a0 for light gray)
+color_hex = "#000000"
+
+# Opacity of dots and split border line
+# Range: 0.0 (invisible) to 1.0 (fully opaque)
+# Default: 1.0
+opacity = 0.35
